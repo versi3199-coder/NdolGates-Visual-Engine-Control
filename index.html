@@ -1,645 +1,907 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>NdolGates Control Center</title>
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #07080d;
-    --surface: #0d1018;
-    --panel: #111520;
-    --border: #1e2535;
-    --accent: #00d4ff;
-    --accent2: #7b2fff;
-    --gold: #f0a500;
-    --green: #00ff88;
-    --red: #ff3355;
-    --orange: #ff8c00;
-    --text: #c8d8f0;
-    --muted: #4a5568;
-    --glow: 0 0 12px rgba(0, 212, 255, 0.4);
-    --glow-green: 0 0 12px rgba(0, 255, 136, 0.4);
-    --glow-red: 0 0 12px rgba(255, 51, 85, 0.4);
-    --r: 10px;
-  }
+"""
+loop-server.py v1.0
+Server khusus untuk Loop Alchemy extension (extension #1 — single video visualisasi).
+Endpoint: /health, /generate_prompt, /generate_caption, /render_loop
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Rajdhani', sans-serif;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+Tidak ada TTS, tidak ada model AI lokal.
+Hanya butuh: Python, Flask, FFmpeg, requests.
 
-  /* Background grid */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image: 
-      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
-    background-size: 40px 40px;
-    pointer-events: none;
-    z-index: 0;
-  }
+Install dependencies:
+    pip install flask flask-cors requests
 
-  .wrap { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 16px; }
+Jalankan:
+    python loop-server.py
+"""
 
-  /* Header */
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 18px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    margin-bottom: 14px;
-    position: relative;
-    overflow: hidden;
-  }
-  .header::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, var(--accent2), var(--accent), var(--accent2));
-    animation: scanline 3s linear infinite;
-    background-size: 200% 100%;
-  }
-  @keyframes scanline { 0%{background-position:0%} 100%{background-position:200%} }
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+import io, os, sys, json, base64, tempfile, subprocess, shutil, re, argparse
 
-  .logo-text { font-size: 1.2rem; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
-  .logo-sub { font-size: 0.7rem; color: var(--muted); font-family: 'Share Tech Mono', monospace; margin-top: 2px; }
-  .live-badge {
-    display: flex; align-items: center; gap: 6px;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.7rem; color: var(--green);
-    background: rgba(0,255,136,0.08);
-    border: 1px solid rgba(0,255,136,0.2);
-    padding: 5px 10px; border-radius: 20px;
-  }
-  .live-dot { width: 7px; height: 7px; background: var(--green); border-radius: 50%; animation: pulse 1.5s ease-in-out infinite; }
-  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
+# ════════════════════════════════════════
+# KONFIGURASI
+# ════════════════════════════════════════
+API_KEY = "sk-SomaA9FWByWiVkC163rcfepkHFiMhiqGDAk1JuObXOUMCDsf"  # chatanywhere free API
 
-  /* Global controls */
-  .global-panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    padding: 14px;
-    margin-bottom: 14px;
-  }
+# ── Ambil port dari argument --port (default 5500) ──
+_parser = argparse.ArgumentParser(description="NdolGates Visual Engine Server")
+_parser.add_argument("--port", type=int, default=5500, help="Port server (default: 5500)")
+_parser.add_argument("--instance", type=str, default="", help="Nama instance, misal: A, B, C")
+_args, _ = _parser.parse_known_args()
+PORT     = _args.port
+INSTANCE = _args.instance or str(PORT)
 
-  .section-title {
-    font-size: 0.65rem;
-    letter-spacing: 3px;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 12px;
-    font-family: 'Share Tech Mono', monospace;
-  }
+# ════════════════════════════════════════
+# FFMPEG — auto detect
+# ════════════════════════════════════════
+FFMPEG  = shutil.which("ffmpeg")
+FFPROBE = shutil.which("ffprobe")
+if not FFMPEG:
+    for p in [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        r"C:\ffmpeg\ffmpeg.exe",
+    ]:
+        if os.path.exists(p):
+            FFMPEG  = p
+            FFPROBE = os.path.join(os.path.dirname(p), "ffprobe.exe")
+            break
 
-  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+# ════════════════════════════════════════
+# FLASK APP
+# ════════════════════════════════════════
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET","POST","OPTIONS"], "allow_headers": ["Content-Type","Authorization"]}}, supports_credentials=False)
 
-  .btn {
-    flex: 1; min-width: 80px;
-    padding: 12px 8px;
-    border: none;
-    border-radius: 8px;
-    font-family: 'Rajdhani', sans-serif;
-    font-size: 0.9rem;
-    font-weight: 700;
-    letter-spacing: 1px;
-    cursor: pointer;
-    transition: all 0.2s;
-    position: relative;
-    overflow: hidden;
-  }
-  .btn:active { transform: scale(0.96); }
-  .btn::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: white;
-    opacity: 0;
-    transition: opacity 0.15s;
-  }
-  .btn:active::after { opacity: 0.08; }
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"]  = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
 
-  .btn-start {
-    background: linear-gradient(135deg, #00b36b, #00ff88);
-    color: #001a0d;
-    box-shadow: var(--glow-green);
-  }
-  .btn-stop {
-    background: linear-gradient(135deg, #cc1133, #ff3355);
-    color: #fff;
-    box-shadow: var(--glow-red);
-  }
-  .btn-pause {
-    background: linear-gradient(135deg, #cc6600, #ff8c00);
-    color: #fff;
-  }
-  .btn-refresh {
-    background: var(--surface);
-    color: var(--accent);
-    border: 1px solid var(--border);
-    flex: 0 0 auto; min-width: 44px; max-width: 44px;
-    padding: 12px 0;
-    font-size: 1.1rem;
-  }
+@app.route("/", defaults={"path": ""}, methods=["OPTIONS"])
+@app.route("/<path:path>", methods=["OPTIONS"])
+def options_handler(path):
+    from flask import Response
+    return Response(status=200)
 
-  /* Stats row */
-  .stats-row {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    margin-top: 12px;
-  }
-  .stat-box {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 8px;
-    text-align: center;
-  }
-  .stat-val {
-    font-size: 1.5rem;
-    font-weight: 700;
-    font-family: 'Share Tech Mono', monospace;
-    color: var(--accent);
-    line-height: 1;
-  }
-  .stat-label { font-size: 0.62rem; color: var(--muted); letter-spacing: 1.5px; margin-top: 3px; }
+# ─────────────────────────────────────────────────────
+# PROMPT ENGINE
+# Budget GPT: max 1700 chars (+ suffix 180 = 1880, aman < 1900)
+# ─────────────────────────────────────────────────────
+PROMPT_STRUCTURE_EXAMPLE = (
+    "A tiny [SUBJECT — human silhouette / lone figure / small character], seen from behind, "
+    "[ACTION — standing/walking/riding/kneeling], facing away from camera toward "
+    "[MASSIVE ENVIRONMENT — cloud vortex / golden portal / heavenly architecture / galactic ocean / fire gateway]. "
+    "The figure occupies only 5-8% of the frame, dwarfed by the epic scale surrounding them. "
+    "[CAMERA MOTION — slow push forward / reverse reveal / orbital drift], camera moving toward the "
+    "single blazing light source at the center of the composition. "
+    "Dramatic chiaroscuro lighting: [LIGHTING — describe god rays, color temperature, contrast]. "
+    "The subject is sharply silhouetted against blinding backlight, a lone witness to something immense. "
+    "Ultra slow motion, every movement glacially slow at 0.2x speed, buttery smooth. "
+    "Cinematic depth of field, volumetric god rays, epic scale contrast. The overall mood is [MOOD]."
+)
 
-  /* IP Input */
-  .ip-panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    padding: 14px;
-    margin-bottom: 14px;
-  }
-  .ip-row { display: flex; gap: 8px; align-items: center; }
-  .ip-input {
-    flex: 1;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    color: var(--accent);
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.85rem;
-    padding: 10px 12px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .ip-input:focus { border-color: var(--accent); }
-  .btn-save {
-    background: var(--accent2);
-    color: #fff;
-    border: none;
-    border-radius: 7px;
-    padding: 10px 14px;
-    font-family: 'Rajdhani', sans-serif;
-    font-weight: 700;
-    font-size: 0.85rem;
-    cursor: pointer;
-    transition: opacity 0.2s;
-  }
-  .btn-save:active { opacity: 0.8; }
-  .ip-hint { font-size: 0.65rem; color: var(--muted); margin-top: 6px; font-family: 'Share Tech Mono', monospace; }
+# Seedance-safe version — same visual result, moderation-friendly wording
+PROMPT_STRUCTURE_EXAMPLE_SEEDANCE = (
+    "A tiny [SUBJECT — human silhouette / lone figure / small character], seen from behind, "
+    "[ACTION — standing/walking/riding/kneeling], facing away from camera toward "
+    "[VAST ENVIRONMENT — swirling nebula vortex / luminous celestial gateway / heavenly architecture / cosmic ocean / radiant energy field]. "
+    "The figure occupies only 5-8% of the frame, emphasizing the vast scale surrounding them. "
+    "[CAMERA MOTION — slow push forward / reverse reveal / orbital drift], camera gently guiding toward the "
+    "soft radiant light at the center of the composition. "
+    "Cinematic lighting: [LIGHTING — describe soft volumetric rays, color temperature, tonal contrast]. "
+    "The subject is sharply silhouetted against a soft radiant backlight, a calm witness to something vast and beautiful. "
+    "Ultra slow motion, every movement glacially slow at 0.2x speed, buttery smooth. "
+    "Cinematic depth of field, soft volumetric light rays filtering through atmospheric haze, epic scale. The overall mood is [MOOD]."
+)
 
-  /* Instance grid */
-  .instances-title {
-    font-size: 0.65rem;
-    letter-spacing: 3px;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 10px;
-    font-family: 'Share Tech Mono', monospace;
-  }
+# ════════════════════════════════════════
+# ENDPOINT: /health
+# ════════════════════════════════════════
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({
+        "status":  "ok",
+        "model":   "ndolgates-visual-engine v2.0",
+        "speaker": "none",          # no TTS
+        "gpu":     False,
+        "ffmpeg":  bool(FFMPEG),
+    })
 
-  .instance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-  .instance-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    padding: 12px;
-    transition: border-color 0.2s;
-    cursor: pointer;
-    position: relative;
-    overflow: hidden;
-  }
-  .instance-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0; height: 2px;
-    background: var(--border);
-    transition: background 0.3s;
-  }
-  .instance-card.online::before { background: var(--green); }
-  .instance-card.running::before { background: var(--accent); animation: blink 1s ease-in-out infinite; }
-  .instance-card.error::before { background: var(--red); }
-  .instance-card.paused::before { background: var(--orange); }
-  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
-  .instance-card.online { border-color: rgba(0,255,136,0.15); }
-  .instance-card.running { border-color: rgba(0,212,255,0.25); }
-  .instance-card.error { border-color: rgba(255,51,85,0.2); }
+# ════════════════════════════════════════
+# ENDPOINT: /analyze_channel
+# Body: { name, mode }
+# Return: { theme, visualRef, motionId, motionLabel, palette, mood }
+# ════════════════════════════════════════
+@app.route("/analyze_channel", methods=["POST"])
+def analyze_channel():
+    try:
+        import requests as req_lib
 
-  .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
-  .card-instance { font-size: 1.3rem; font-weight: 700; letter-spacing: 1px; }
-  .card-port { font-family: 'Share Tech Mono', monospace; font-size: 0.65rem; color: var(--muted); }
+        data = request.get_json()
+        name       = data.get("name", "").strip()
+        mode       = data.get("mode", "B")
+        video_model= data.get("videoModel", "sora2pro")
 
-  .card-status {
-    font-size: 0.6rem;
-    font-weight: 700;
-    letter-spacing: 1.5px;
-    padding: 3px 7px;
-    border-radius: 4px;
-    text-transform: uppercase;
-  }
-  .status-offline { background: rgba(74,85,104,0.3); color: var(--muted); }
-  .status-online { background: rgba(0,255,136,0.12); color: var(--green); }
-  .status-running { background: rgba(0,212,255,0.12); color: var(--accent); }
-  .status-error { background: rgba(255,51,85,0.12); color: var(--red); }
-  .status-paused { background: rgba(255,140,0,0.12); color: var(--orange); }
+        if not name:
+            return jsonify({"error": "Nama akun tidak boleh kosong"}), 400
 
-  .card-step {
-    font-size: 0.68rem;
-    color: var(--muted);
-    font-family: 'Share Tech Mono', monospace;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-top: 2px;
-  }
-  .card-videos { font-size: 0.65rem; color: var(--accent); margin-top: 6px; font-family: 'Share Tech Mono', monospace; }
+        print(f"[analyze_channel] name={name!r} | mode={mode} | model={video_model!r}")
 
-  /* Card mini buttons */
-  .card-actions { display: flex; gap: 5px; margin-top: 8px; }
-  .card-btn {
-    flex: 1;
-    padding: 5px 0;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--surface);
-    color: var(--text);
-    font-family: 'Rajdhani', sans-serif;
-    font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .card-btn.start { color: var(--green); border-color: rgba(0,255,136,0.2); }
-  .card-btn.stop  { color: var(--red); border-color: rgba(255,51,85,0.2); }
-  .card-btn:active { opacity: 0.7; transform: scale(0.95); }
+        is_kling = (video_model == "kling03omni")
 
-  /* Log panel */
-  .log-panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    padding: 14px;
-    margin-top: 14px;
-  }
-  .log-box {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 10px;
-    height: 120px;
-    overflow-y: auto;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.65rem;
-    line-height: 1.7;
-  }
-  .log-entry { color: var(--muted); }
-  .log-entry.ok { color: var(--green); }
-  .log-entry.err { color: var(--red); }
-  .log-entry.info { color: var(--accent); }
+        motion_options = (
+            "push_forward (ultra slow push toward portal/light), "
+            "reverse_reveal (slow zoom out reveal), "
+            "orbit_subject (slow circular orbit around figure), "
+            "slow_descent (descending push toward portal), "
+            "slow_zoom (ultra slow zoom in), "
+            "drift (slow horizontal drift)"
+        )
 
-  /* Toast */
-  .toast {
-    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-    background: var(--panel);
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    padding: 10px 20px;
-    border-radius: 20px;
-    font-size: 0.8rem;
-    font-family: 'Share Tech Mono', monospace;
-    z-index: 999;
-    opacity: 0;
-    transition: opacity 0.3s;
-    white-space: nowrap;
-    box-shadow: var(--glow);
-  }
-  .toast.show { opacity: 1; }
+        if mode == "A":
+            mode_instruction = (
+                "Mode A: channel punya tema FIXED. Tentukan tema spesifik yang dipakai KONSISTEN "
+                "setiap video. Visual style, warna, environment terkunci dan selalu serupa."
+            )
+        else:
+            mode_instruction = (
+                "Mode B: channel punya mood FIXED tapi tema VARIASI. "
+                "Tentukan koridor mood luas sehingga GPT bisa pilih environment berbeda tiap video, "
+                "tapi nuansa dan feeling channel tetap konsisten."
+            )
 
-  /* Spinner */
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .spin { display: inline-block; animation: spin 1s linear infinite; }
+        # Instruksi palette berbeda per model
+        if is_kling:
+            palette_instruction = (
+                '  "palette": "3-4 color PAIRS with explicit transitions e.g. '
+                '\'deep indigo bleeding into molten amber, shadow black dissolving into crimson gold\'. '
+                'Must describe HOW colors transition, not just list them — this is critical for Kling color gradation",'
+            )
+            model_note = (
+                "\n- PALETTE is the most important key for this channel — "
+                "describe explicit color transition pairs (A bleeding into B) "
+                "that will create rich chromatic gradation in the video. "
+                "Think painterly color washes, atmospheric color depth, luminous bleeding."
+            )
+        else:
+            palette_instruction = (
+                '  "palette": "3-4 main colors e.g. deep indigo, molten gold, charcoal black",'
+            )
+            model_note = ""
 
-  /* Responsive: single column on very small screens */
-  @media (max-width: 340px) {
-    .instance-grid { grid-template-columns: 1fr; }
-  }
-</style>
-</head>
-<body>
-<div class="wrap">
+        system_msg = (
+            "You are a creative director for viral aesthetic video channels. "
+            "Analyze the channel name and create its DNA. "
+            "Return ONLY valid JSON, no explanation, no markdown."
+        )
 
-  <!-- Header -->
-  <div class="header">
-    <div>
-      <div class="logo-text">⚡ NDOLGATES</div>
-      <div class="logo-sub">VISUAL ENGINE v2.0 — CONTROL CENTER</div>
-    </div>
-    <div class="live-badge">
-      <div class="live-dot"></div>
-      LIVE
-    </div>
-  </div>
+        user_msg = "\n".join([
+            f"CHANNEL NAME: {name}",
+            f"CONTENT MODE: {mode_instruction}",
+            "",
+            "Create the channel DNA as JSON with these exact keys:",
+            '{',
+            '  "theme": "specific visual theme (what the tiny silhouetted figure faces)",',
+            '  "visualRef": "detailed visual style: environment, color palette, lighting, texture",',
+            palette_instruction,
+            '  "mood": "emotional mood in 3-5 words e.g. awe-inspiring, melancholic, transcendent",',
+            '  "motionId": "one of: push_forward|reverse_reveal|orbit_subject|slow_descent|slow_zoom|drift",',
+            '  "motionLabel": "human readable motion name"',
+            '}',
+            "",
+            f"Motion options: {motion_options}",
+            "Rules:",
+            "- theme must be specific epic environment NOT generic (e.g. swirling nebula vortex not space)",
+            "- visualRef must mention: tiny silhouetted figure, back to camera, single light source, epic scale",
+            "- motionId must exactly match one of the options",
+            "- Return ONLY the JSON object, nothing else",
+            model_note,
+        ])
 
-  <!-- IP Config -->
-  <div class="ip-panel">
-    <div class="section-title">🖥 IP Komputer (PC lokal kamu)</div>
-    <div class="ip-row">
-      <input class="ip-input" id="serverIp" type="text" placeholder="192.168.1.x" maxlength="15">
-      <button class="btn-save" onclick="saveIp()">SIMPAN</button>
-    </div>
-    <div class="ip-hint">Cari IP di CMD: <strong>ipconfig</strong> → lihat IPv4 Address</div>
-  </div>
+        api_resp = req_lib.post(
+            "https://api.chatanywhere.tech/v1/chat/completions",
+            headers={
+                "Content-Type":  "application/json",
+                "Authorization": f"Bearer {API_KEY}",
+            },
+            json={
+                "model":       "gpt-4o-mini",
+                "max_tokens":  500,
+                "temperature": 0.7,
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user",   "content": user_msg},
+                ],
+            },
+            timeout=30,
+        )
 
-  <!-- Global Controls -->
-  <div class="global-panel">
-    <div class="section-title">🌐 Kontrol Global (Semua Instance)</div>
-    <div class="btn-row">
-      <button class="btn btn-start" onclick="runAll('start')">▶ JALANKAN</button>
-      <button class="btn btn-pause" onclick="runAll('pause')">⏸ JEDA</button>
-      <button class="btn btn-stop" onclick="runAll('stop')">⏹ STOP</button>
-      <button class="btn btn-refresh" onclick="refreshAll(false)" title="Refresh">↻</button>
-    </div>
-    <div class="stats-row">
-      <div class="stat-box">
-        <div class="stat-val" id="statOnline">—</div>
-        <div class="stat-label">ONLINE</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-val" id="statRunning" style="color:var(--accent)">—</div>
-        <div class="stat-label">RUNNING</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-val" id="statVideos" style="color:var(--gold)">—</div>
-        <div class="stat-label">VIDEOS</div>
-      </div>
-    </div>
-  </div>
+        if not api_resp.ok:
+            raise Exception(f"GPT error {api_resp.status_code}: {api_resp.text[:200]}")
 
-  <!-- Instance Cards -->
-  <div class="instances-title">📡 STATUS 11 INSTANCE</div>
-  <div class="instance-grid" id="instanceGrid">
-    <!-- Generated by JS -->
-  </div>
+        raw = api_resp.json()["choices"][0]["message"]["content"].strip()
+        if raw.startswith("```"):
+            raw = re.sub(r'^```[a-z]*\n?', '', raw)
+            raw = re.sub(r'\n?```$', '', raw)
+        raw = raw.strip()
 
-  <!-- Log -->
-  <div class="log-panel">
-    <div class="section-title">📋 Activity Log</div>
-    <div class="log-box" id="logBox"></div>
-  </div>
+        dna = json.loads(raw)
+        print(f"✅ Channel DNA: {name!r} | mode={mode} | motion={dna.get('motionId')}")
+        return jsonify(dna)
 
-</div>
+    except json.JSONDecodeError as e:
+        print(f"❌ DNA JSON error: {e}")
+        return jsonify({"error": f"GPT response bukan JSON valid: {e}"}), 500
+    except Exception as e:
+        print(f"❌ analyze_channel error: {e}")
+        return jsonify({"error": str(e)}), 500
 
-<!-- Toast -->
-<div class="toast" id="toast"></div>
+# ════════════════════════════════════════
+# ENDPOINT: /generate_prompt
+# Body: { theme, motion, duration, reference, suffix }
+# Return: { prompt }
+# ════════════════════════════════════════
+@app.route("/generate_prompt", methods=["POST"])
+def generate_prompt():
+    try:
+        import requests as req_lib, random
 
-<script>
-// ═══════════════════════════════════
-// CONFIG
-// ═══════════════════════════════════
-const INSTANCES = [
-  { id: 'A', port: 5500 },
-  { id: 'B', port: 5501 },
-  { id: 'C', port: 5502 },
-  { id: 'D', port: 5503 },
-  { id: 'E', port: 5504 },
-  { id: 'F', port: 5505 },
-  { id: 'G', port: 5506 },
-  { id: 'H', port: 5507 },
-  { id: 'I', port: 5508 },
-  { id: 'J', port: 5509 },
-  { id: 'K', port: 5510 },
-];
+        import random as _random
+        data       = request.get_json()
+        mode       = data.get("mode", "B")          # A=konsisten, B=variasi
+        channel_dna= data.get("channelDNA", None)   # DNA dari analisis channel
+        suffix     = data.get("suffix", "")
+        motion     = data.get("motion", "")
+        video_model= data.get("videoModel", "sora2pro")  # sora2pro | kling03omni | auto
 
-let serverIp = localStorage.getItem('ndol_ip') || '127.0.0.1';
-let instanceData = {};
-let autoRefreshTimer = null;
+        # Mode B: GPT pilih tema acak dalam koridor DNA channel
+        # Mode A: gunakan tema DNA yang terkunci
+        if channel_dna and mode == "B":
+            # Buat variasi tema dari mood/palette DNA channel
+            palette = channel_dna.get("palette", "")
+            mood    = channel_dna.get("mood", "")
+            base    = channel_dna.get("theme", "")
+            theme   = data.get("theme", base)
+            reference = channel_dna.get("visualRef", data.get("reference", "")).strip()
+            # Instruksi variasi: GPT diminta buat tema baru dalam koridor mood ini
+            variation_hint = (
+                f"CHANNEL MOOD CORRIDOR: {mood} | PALETTE: {palette} | "
+                f"BASE THEME: {base} — create a DIFFERENT specific environment "
+                f"this video, staying within the same mood and palette corridor."
+            )
+        elif channel_dna and mode == "A":
+            theme     = channel_dna.get("theme", data.get("theme", ""))
+            reference = channel_dna.get("visualRef", data.get("reference", "")).strip()
+            variation_hint = None
+        else:
+            theme     = data.get("theme", "")
+            reference = data.get("reference", "").strip()
+            variation_hint = None
 
-// ═══════════════════════════════════
-// IP MANAGEMENT
-// ═══════════════════════════════════
-function saveIp() {
-  const val = document.getElementById('serverIp').value.trim();
-  if (!val) return showToast('Masukkan IP dulu!');
-  serverIp = val;
-  localStorage.setItem('ndol_ip', val);
-  showToast('✅ IP disimpan: ' + val);
-  refreshAll();
+        if not theme:
+            return jsonify({"error": "Theme tidak boleh kosong"}), 400
+
+        # Budget ketat: 1900 - suffix - 1 spasi - buffer 50
+        suffix_len = len(suffix) + 1
+        hard_limit = 1900 - suffix_len
+        gpt_limit  = hard_limit - 100
+
+        print(f"[generate_prompt] theme={theme!r} | model={video_model!r} | mode={mode!r} | reference={reference[:40]!r} | gpt_limit={gpt_limit}")
+
+        is_kling    = (video_model == "kling03omni")
+        is_seedance = (video_model == "seedance20")
+
+        # Pilih orientasi kamera secara acak — formula viral: tiny human + massive environment
+        # Seedance pakai kata-kata yang lebih halus untuk menghindari moderasi
+        if is_seedance:
+            orientations = [
+                "ultra slow push forward, camera gliding toward a soft radiant light source in the center distance, subject silhouetted small in foreground, back to camera",
+                "slow reverse zoom out from close behind the subject, pulling back to reveal the vast beautiful environment surrounding them, subject remains centered",
+                "ultra slow circular orbit around the lone silhouetted figure, camera drifting sideways as subject faces the luminous horizon ahead",
+                "distant trailing shot, subject tiny and silhouetted at the base of a towering luminous structure, camera slowly pushing forward",
+                "low-angle push forward from ground level, subject's silhouette framed against soft radiant backlight from a vast structure above, camera gliding in",
+                "elevated rear-angle slow push, watching the lone figure approach an enormous radiant opening of light, dwarfed by the epic scale, camera following from behind and above",
+            ]
+        else:
+            orientations = [
+                "ultra slow push forward, camera gliding toward a single blazing light source in the center distance, subject silhouetted small in foreground, back to camera",
+                "slow reverse zoom out from close behind the subject, pulling back to reveal the massive epic environment surrounding them, subject remains centered",
+                "ultra slow circular orbit around the lone silhouetted figure, camera drifting sideways as subject faces the glowing horizon ahead",
+                "distant trailing shot, subject tiny and silhouetted at the base of a towering portal or gateway, camera slowly pushing forward",
+                "low-angle push forward from ground level, subject's silhouette framed against blinding backlight from massive structure above, camera gliding in",
+                "elevated rear-angle slow push, watching the lone figure approach an enormous gateway of light, dwarfed by the epic scale, camera following from behind and above",
+            ]
+        orientation = random.choice(orientations)
+
+        # Palette dari DNA channel — dipakai untuk instruksi gradasi warna Kling
+        dna_palette = ""
+        if channel_dna and is_kling:
+            dna_palette = channel_dna.get("palette", "")
+
+        if is_kling:
+            system_msg = (
+                "You are a Kling AI video prompt engineer specialized in cinematic color grading. "
+                "Your output MUST follow the STRUCTURE TEMPLATE exactly. "
+                "Fill in each [BRACKET] with content matching the user's THEME and VISUAL REFERENCE. "
+                f"ABSOLUTE RULE: output MUST be {gpt_limit} characters or fewer — count every character. "
+                "Output ONLY the final prompt text, no brackets visible, no explanation, no markdown."
+            )
+        elif is_seedance:
+            # Seedance: hindari kata-kata yang memicu moderasi
+            system_msg = (
+                "You are a Seedance AI video prompt engineer specialized in calm cinematic atmospheres. "
+                "Your output MUST follow the STRUCTURE TEMPLATE exactly. "
+                "Fill in each [BRACKET] with content matching the user's THEME and VISUAL REFERENCE. "
+                f"ABSOLUTE RULE: output MUST be {gpt_limit} characters or fewer — count every character. "
+                "IMPORTANT: use gentle, atmospheric language. Avoid words like 'blazing', 'blinding', "
+                "'overwhelming', 'massive', 'immense', 'transcendental', 'god rays'. "
+                "Replace with: 'radiant', 'luminous', 'soft', 'vast', 'awe-inspiring', 'volumetric light rays'. "
+                "Output ONLY the final prompt text, no brackets visible, no explanation, no markdown."
+            )
+        else:
+            # Sora 2 Pro — naratif sinematik, tidak ada perubahan dari versi sebelumnya
+            system_msg = (
+                "You are a Sora video prompt engineer. "
+                "Your output MUST follow the STRUCTURE TEMPLATE exactly. "
+                "Fill in each [BRACKET] with content matching the user's THEME and VISUAL REFERENCE. "
+                f"ABSOLUTE RULE: output MUST be {gpt_limit} characters or fewer — count every character. "
+                "Output ONLY the final prompt text, no brackets visible, no explanation, no markdown."
+            )
+
+        # Aturan gradasi warna khusus Kling — disisipkan ke RULES
+        kling_color_rules = (
+            "- MANDATORY COLOR GRADATION: describe explicit smooth color transitions in the sky/atmosphere "
+            "— e.g. 'sky transitions from deep [COLOR A] at the edges bleeding into [COLOR B] near the light source, "
+            "soft chromatic gradation layered across the atmosphere'. "
+            + (f"Use these palette colors as the base: {dna_palette}. " if dna_palette else "") +
+            "Color gradation must feel rich, painterly, and luminous.\n"
+            "- Color bleeding and tonal depth: mention 'luminous color wash', 'atmospheric color depth', "
+            "or 'soft chromatic haze' to reinforce gradient richness.\n"
+        )
+
+        # Seedance: aturan khusus agar lolos moderasi tanpa mengurangi kualitas visual
+        seedance_safe_rules = (
+            "- AVOID these words (they trigger moderation): 'blazing', 'blinding', 'overwhelming', "
+            "'immense', 'transcendental', 'massive gateway', 'god rays'\n"
+            "- REPLACE with: 'radiant' / 'luminous' / 'vast' / 'breathtaking' / 'volumetric light rays' / 'radiant vortex'\n"
+            "- Lighting: use 'soft cinematic lighting' and 'deep shadows contrast with luminous highlights'\n"
+            "- Backlight: use 'soft radiant backlight' instead of 'blinding backlight'\n"
+            "- Scale: use 'vast cosmic scale' or 'expansive environment' instead of 'overwhelming'\n"
+            "- Mood: use 'calm, awe-inspiring, contemplative' — avoid 'transcendental'\n"
+        )
+
+        # Pilih template struktur sesuai model
+        prompt_template = PROMPT_STRUCTURE_EXAMPLE_SEEDANCE if is_seedance else PROMPT_STRUCTURE_EXAMPLE
+
+        # Default visual reference berbeda untuk Seedance
+        default_visual_ref = (
+            "calm cinematic fantasy art, soft atmospheric lighting, luminous color depth, painterly texture"
+            if is_seedance else
+            "grandiose hyper-stylized fantasy art, dramatic chiaroscuro, painterly texture"
+        )
+
+        user_msg = (
+            "STRUCTURE TEMPLATE (follow this exact format, replace [BRACKETS] with your content):\n" +
+            prompt_template + "\n\n" +
+            "YOUR INPUT:\n" +
+            f"THEME: {theme}\n" +
+            (f"VARIATION INSTRUCTION: {variation_hint}\n" if variation_hint else "") +
+            f"CAMERA: {orientation}\n" +
+            f"MOTION STYLE: {motion or 'ultra slow motion, glacially slow, 0.2x speed'}\n" +
+            (f"VISUAL REFERENCE — use this as the primary style/mood/aesthetic guide: {reference[:500]}\n"
+             if reference else
+             f"VISUAL REFERENCE: {default_visual_ref}\n") +
+            "\nRULES:\n" +
+            f"- MAX {gpt_limit} CHARACTERS total — this is a hard limit, count before you output\n" +
+            "- The subject/object/environment must match THEME and VISUAL REFERENCE, NOT the example\n" +
+            "- MANDATORY: human figure / silhouette must be TINY — only 5-8% of the frame\n" +
+            "- MANDATORY: there must be a single dominant LIGHT SOURCE (radiant vortex, luminous portal, sun, nebula center) in the center\n" +
+            "- Subject always faces AWAY from camera, back to viewer, looking toward the light\n" +
+            "- Environment must feel VAST and EPIC compared to the tiny subject\n" +
+            "- Ultra slow motion language is mandatory: 'glacially slow', '0.2x speed', 'buttery smooth'\n" +
+            (seedance_safe_rules if is_seedance else
+             "- Chiaroscuro lighting is mandatory: describe specific colors (amber, sapphire, crimson, gold, etc.)\n"
+             "- Mention 'volumetric god rays' and 'silhouetted against blinding backlight'\n") +
+            (kling_color_rules if is_kling else "") +
+            "- ONE flowing paragraph, no line breaks\n" +
+            "- End at a complete sentence within the limit\n" +
+            "- Return ONLY the prompt text, nothing else"
+        )
+
+        api_resp = req_lib.post(
+            "https://api.chatanywhere.tech/v1/chat/completions",
+            headers={
+                "Content-Type":  "application/json",
+                "Authorization": f"Bearer {API_KEY}",
+            },
+            json={
+                "model":       "gpt-4o-mini",
+                "max_tokens":  600,
+                "temperature": 0.8,
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user",   "content": user_msg},
+                ],
+            },
+            timeout=30,
+        )
+
+        if not api_resp.ok:
+            raise Exception(f"GPT error {api_resp.status_code}: {api_resp.text[:200]}")
+
+        prompt = api_resp.json()["choices"][0]["message"]["content"].strip()
+
+        # Bersihkan jika GPT menambahkan quote
+        for ch in ('"', "'", "`"):
+            if prompt.startswith(ch) and prompt.endswith(ch):
+                prompt = prompt[1:-1].strip()
+
+        # Hard truncate — batas absolut
+        if len(prompt) > hard_limit:
+            print(f"⚠️  GPT menghasilkan {len(prompt)} chars — truncate ke {hard_limit}")
+            prompt = prompt[:hard_limit]
+            last_dot = prompt.rfind(".")
+            if last_dot > hard_limit - 300:
+                prompt = prompt[:last_dot + 1]
+            print(f"⚠️  Setelah truncate: {len(prompt)} chars")
+
+        total = len(prompt) + suffix_len
+        print(f"✅ Prompt final: {len(prompt)} chars | total+suffix: {total} chars")
+        assert total <= 1900, f"BUG: total {total} > 1900!"
+        return jsonify({"prompt": prompt})
+
+    except AssertionError as e:
+        print(f"❌ {e}")
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        print(f"❌ generate_prompt error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ════════════════════════════════════════
+# ENDPOINT: /generate_caption
+# Body: { theme, channel_name, platform }
+# Return: { title, caption, hashtags }
+# ════════════════════════════════════════
+@app.route("/generate_caption", methods=["POST"])
+def generate_caption():
+    try:
+        import requests as req_lib
+
+        data         = request.get_json()
+        theme        = data.get("theme", "")
+        channel_name = data.get("channel_name", "")
+        platform     = data.get("platform", "Instagram Reels, YouTube Shorts, Facebook Reels, TikTok")
+
+        if not theme:
+            return jsonify({"error": "Theme kosong"}), 400
+
+        prompt = f"""Kamu adalah social media copywriter viral kelas dunia.
+Buat caption + hashtag untuk video aesthetic AI dengan tema berikut:
+
+TEMA VIDEO: {theme}
+NAMA CHANNEL: {channel_name}
+PLATFORM: {platform}
+
+ATURAN CAPTION:
+- Tulis dalam Bahasa Inggris (lebih viral di sosmed internasional)
+- 1-3 kalimat pendek, emosional, puitis, mysterious
+- Akhiri dengan 1 pertanyaan atau CTA pendek yang memancing komentar
+- Gunakan maksimal 2-3 emoji yang relevan
+- Jangan sebut nama brand, AI, atau Leonardo
+
+ATURAN HASHTAG:
+- 15-20 hashtag campuran: niche (spesifik tema) + medium + besar
+- Pisahkan dengan spasi
+- Tidak ada # duplikat
+- Mix antara tema spesifik dan hashtag viral umum
+
+ATURAN TITLE (untuk YouTube):
+- Maksimal 60 karakter
+- Menarik, mengandung rasa penasaran
+- Boleh pakai angka atau pertanyaan
+
+Jawab HANYA dalam format JSON valid ini, tanpa teks lain:
+{{
+  "title": "judul YouTube max 60 karakter",
+  "caption": "caption 1-3 kalimat + CTA",
+  "hashtags": "#tag1 #tag2 #tag3 ... (15-20 hashtag)"
+}}"""
+
+        api_resp = req_lib.post(
+            "https://api.chatanywhere.tech/v1/chat/completions",
+            headers={
+                "Content-Type":  "application/json",
+                "Authorization": f"Bearer {API_KEY}",
+            },
+            json={
+                "model":      "gpt-4o-mini",
+                "max_tokens": 600,
+                "messages":   [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+
+        if not api_resp.ok:
+            raise Exception(f"GPT error {api_resp.status_code}")
+
+        raw = api_resp.json()["choices"][0]["message"]["content"].strip()
+
+        # Bersihkan markdown code block jika ada
+        if raw.startswith("```"):
+            raw = re.sub(r'^```[a-z]*\n?', '', raw)
+            raw = re.sub(r'\n?```$', '', raw)
+        raw = raw.strip()
+
+        result = json.loads(raw)
+        print(f"✅ Caption generated untuk tema: {theme[:50]}")
+        return jsonify(result)
+
+    except json.JSONDecodeError as e:
+        print(f"❌ Caption JSON error: {e}")
+        # Fallback manual jika GPT gagal parse
+        return jsonify({
+            "title":    theme[:60],
+            "caption":  "Some things are too beautiful to explain. Just feel it. 🌌\n\nWhat does this make you feel? 👇",
+            "hashtags": "#aivideo #aestheticvideo #visualloop #cinematic #4k #viral #fyp #reels #shorts #satisfying",
+        })
+    except Exception as e:
+        print(f"❌ generate_caption error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ════════════════════════════════════════
+# ENDPOINT: /render_loop
+# Body: { video_url, loop_type, music_b64, music_volume, preset }
+# Return: MP4 file
+# ════════════════════════════════════════
+@app.route("/render_loop", methods=["POST"])
+def render_loop():
+    if not FFMPEG:
+        return jsonify({"error": "FFmpeg tidak ditemukan. Install FFmpeg dulu!"}), 500
+
+    tmp = tempfile.mkdtemp(prefix="loop_alchemy_")
+    try:
+        import urllib.request
+
+        data       = request.get_json()
+        video_url  = data.get("video_url")
+        music_b64  = data.get("music_b64")
+        music_vol  = float(data.get("music_volume", 0.2))
+
+        if not video_url:
+            return jsonify({"error": "video_url dibutuhkan"}), 400
+
+        print(f"\n🎬 Render Loop: music={'ada' if music_b64 else 'tidak'}")
+
+        # ── 1. Download video dari Leonardo ──
+        print("  ⬇ Download video...")
+        req = urllib.request.Request(video_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Referer":    "https://app.leonardo.ai/",
+        })
+
+        # Simpan dengan ekstensi sementara dulu, deteksi format dari Content-Type atau magic bytes
+        raw_path = os.path.join(tmp, "raw_download")
+        with urllib.request.urlopen(req, timeout=120) as r:
+            content_type = r.headers.get("Content-Type", "").lower()
+            raw_data = r.read()
+
+        with open(raw_path, "wb") as f:
+            f.write(raw_data)
+
+        size_kb = len(raw_data) / 1024
+        print(f"  ✅ {size_kb:.0f} KB | Content-Type: {content_type}")
+
+        if size_kb < 1:
+            return jsonify({"error": "Video yang didownload terlalu kecil / kosong"}), 500
+
+        # Deteksi format dari magic bytes
+        magic = raw_data[:12]
+        is_webp = magic[8:12] == b"WEBP"
+        is_mp4  = magic[4:8] in (b"ftyp", b"moov") or raw_data[4:8] == b"ftyp"
+        is_mkv  = magic[:4] == b"\x1a\x45\xdf\xa3"
+
+        print(f"  🔍 Format deteksi: webp={is_webp}, mp4={is_mp4}, mkv={is_mkv}, ct={content_type}")
+
+        base_path = os.path.join(tmp, "base.mp4")
+
+        if is_webp or "webp" in content_type:
+            # WebP animated → convert ke MP4 via FFmpeg
+            print("  🔄 Format WebP terdeteksi — convert ke MP4...")
+            webp_path = os.path.join(tmp, "raw.webp")
+            os.rename(raw_path, webp_path)
+            run_ffmpeg([
+                "-i", webp_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-y", base_path,
+            ])
+            print("  ✅ Convert WebP → MP4 selesai")
+        elif is_mkv or "matroska" in content_type or "mkv" in content_type:
+            print("  🔄 Format MKV terdeteksi — convert ke MP4...")
+            mkv_path = os.path.join(tmp, "raw.mkv")
+            os.rename(raw_path, mkv_path)
+            run_ffmpeg([
+                "-i", mkv_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                "-y", base_path,
+            ])
+            print("  ✅ Convert MKV → MP4 selesai")
+        else:
+            # Asumsikan MP4 / format kompatibel langsung
+            os.rename(raw_path, base_path)
+            print("  ✅ Format MP4 — dipakai langsung")
+
+        video_dur = get_duration(base_path)
+        print(f"  ℹ️ Durasi video: {video_dur:.1f} detik")
+
+        # ── 2. Simpan musik ambient (jika ada) ──
+        music_path = None
+        if music_b64:
+            music_path = os.path.join(tmp, "music.mp3")
+            with open(music_path, "wb") as f:
+                f.write(base64.b64decode(music_b64))
+            print(f"  🎵 Musik ambient: vol={music_vol}")
+
+        # ── 3. Final output ──
+        output = os.path.join(tmp, "output.mp4")
+        print("  🎬 Final output...")
+
+        if music_path and os.path.exists(music_path):
+            music_dur = get_duration(music_path)
+            print(f"  🎵 Durasi musik: {music_dur:.1f}s")
+
+            # Hitung loop count yang aman — hindari size overflow
+            loop_count = max(1, int(video_dur / max(music_dur, 1)) + 2)
+            print(f"  🔁 Audio loop count: {loop_count}")
+
+            # Coba metode 1: re-encode video + audio (paling kompatibel)
+            try:
+                run_ffmpeg([
+                    "-i", base_path,
+                    "-stream_loop", str(loop_count), "-i", music_path,
+                    "-map", "0:v",
+                    "-map", "1:a",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-af", f"volume={music_vol}",
+                    "-shortest",
+                    "-movflags", "+faststart",
+                    "-y", output,
+                ])
+                print("  ✅ Render metode 1 (re-encode) berhasil")
+            except Exception as e1:
+                print(f"  ⚠️ Metode 1 gagal: {e1} — coba metode 2 (filter_complex)")
+                # Fallback metode 2: filter_complex dengan loop count eksplisit
+                run_ffmpeg([
+                    "-i", base_path,
+                    "-i", music_path,
+                    "-filter_complex",
+                    f"[1:a]aloop=loop={loop_count}:size=44100,volume={music_vol},atrim=duration={video_dur}[aout]",
+                    "-map", "0:v",
+                    "-map", "[aout]",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart",
+                    "-y", output,
+                ])
+                print("  ✅ Render metode 2 (filter_complex) berhasil")
+        else:
+            print("  ℹ️ Tanpa musik — re-encode untuk kompatibilitas maksimal")
+            run_ffmpeg([
+                "-i", base_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-an",
+                "-movflags", "+faststart",
+                "-y", output,
+            ])
+
+        size_mb = os.path.getsize(output) / 1024 / 1024
+        print(f"✅ Render selesai! {size_mb:.1f} MB, {video_dur:.1f} detik")
+
+        return send_file(
+            output,
+            mimetype="video/mp4",
+            download_name="aesthetic-loop.mp4",
+            as_attachment=True,
+        )
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        import threading, time
+        def cleanup():
+            time.sleep(10)
+            shutil.rmtree(tmp, ignore_errors=True)
+        threading.Thread(target=cleanup, daemon=True).start()
+
+
+
+# ════════════════════════════════════════
+# ENDPOINT: /host_video
+# Terima video file, simpan sementara, return URL publik
+# Dibutuhkan oleh Instagram upload (Graph API butuh URL publik)
+# Body: multipart/form-data dengan field "video" (file .mp4)
+# Return: { url, expires_in }
+# ════════════════════════════════════════
+import time as _time
+_hosted_videos = {}  # { token: (filepath, expire_time) }
+
+@app.route("/host_video", methods=["POST"])
+def host_video():
+    """
+    Simpan video sementara dan return URL publik yang bisa diakses Instagram.
+    Video akan expired setelah 1 jam.
+    CATATAN: Untuk production, ganti dengan cloud storage (S3, GCS, dst).
+    """
+    if "video" not in request.files:
+        return jsonify({"error": "Field 'video' tidak ada di request"}), 400
+
+    file  = request.files["video"]
+    token = base64.urlsafe_b64encode(os.urandom(16)).decode()
+    tmp_dir = tempfile.mkdtemp(prefix="ndolgates_host_")
+    path  = os.path.join(tmp_dir, "video.mp4")
+    file.save(path)
+
+    expire = _time.time() + 3600  # 1 jam
+    _hosted_videos[token] = (path, expire)
+
+    # Cleanup expired videos
+    for t, (p, exp) in list(_hosted_videos.items()):
+        if _time.time() > exp:
+            try: shutil.rmtree(os.path.dirname(p), ignore_errors=True)
+            except: pass
+            del _hosted_videos[t]
+
+    host = request.host  # e.g. 127.0.0.1:5500
+    url  = f"http://{host}/hosted/{token}"
+    print(f"[host_video] Hosted: {token[:8]}... expires in 1 hour")
+    return jsonify({"url": url, "expires_in": 3600, "token": token})
+
+
+@app.route("/hosted/<token>", methods=["GET"])
+def serve_hosted_video(token):
+    """Serve video yang sudah di-host."""
+    import time as _t
+    if token not in _hosted_videos:
+        return jsonify({"error": "Video tidak ditemukan atau sudah expired"}), 404
+    path, expire = _hosted_videos[token]
+    if _t.time() > expire:
+        del _hosted_videos[token]
+        return jsonify({"error": "Video sudah expired"}), 410
+    return send_file(path, mimetype="video/mp4")
+
+
+# ════════════════════════════════════════
+# HELPERS
+# ════════════════════════════════════════
+def run_ffmpeg(args):
+    cmd    = [FFMPEG] + args
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        err_lines = [l for l in result.stderr.split("\n") if any(k in l for k in ("rror", "nvalid", "ailed"))]
+        raise Exception("FFmpeg error:\n" + "\n".join(err_lines[-5:]) if err_lines else result.stderr[-300:])
+    return result
+
+
+def get_duration(path):
+    if not FFPROBE:
+        return 60.0
+    result = subprocess.run(
+        [FFPROBE, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path],
+        capture_output=True, text=True,
+    )
+    try:
+        info = json.loads(result.stdout)
+        if "format" in info and "duration" in info["format"]:
+            return float(info["format"]["duration"])
+        for s in info.get("streams", []):
+            if "duration" in s:
+                return float(s["duration"])
+    except Exception:
+        pass
+    return 60.0
+
+
+# ════════════════════════════════════════
+# STATE TRACKING (untuk Dashboard)
+# ════════════════════════════════════════
+import threading as _threading
+_state_lock = _threading.Lock()
+_server_state = {
+    "status": "idle",          # idle | running | paused | error
+    "current_channel": None,
+    "current_step": None,
+    "videos_done": 0,
+    "last_error": None,
+    "loop_active": False,
+    "started_at": None,
 }
 
-function getUrl(port, endpoint) {
-  return `http://${serverIp}:${port}${endpoint}`;
-}
+def update_state(**kwargs):
+    with _state_lock:
+        _server_state.update(kwargs)
 
-// ═══════════════════════════════════
-// RENDER CARDS
-// ═══════════════════════════════════
-function renderCards() {
-  const grid = document.getElementById('instanceGrid');
-  grid.innerHTML = '';
-  INSTANCES.forEach(inst => {
-    const d = instanceData[inst.id] || {};
-    const status = d.status || 'offline';
-    const statusClass = status === 'idle' ? 'online' : status;
-    const statusLabel = status === 'idle' ? 'ONLINE' : status.toUpperCase();
+@app.route("/status", methods=["GET"])
+def status():
+    import time as _t
+    with _state_lock:
+        data = dict(_server_state)
+    data["instance"] = INSTANCE
+    data["port"] = PORT
+    data["ffmpeg"] = bool(FFMPEG)
+    data["uptime"] = round(_t.time() - _server_start_time)
+    return jsonify(data)
 
-    const card = document.createElement('div');
-    card.className = `instance-card ${statusClass}`;
-    card.innerHTML = `
-      <div class="card-header">
-        <div>
-          <div class="card-instance" style="color:${colorForStatus(status)}">
-            ${inst.id}
-          </div>
-          <div class="card-port">:${inst.port}</div>
-        </div>
-        <span class="card-status status-${statusClass}">${statusLabel}</span>
-      </div>
-      <div class="card-step">${d.current_step || (status === 'offline' ? 'Tidak terhubung' : 'Siap')}</div>
-      <div class="card-videos">🎬 ${d.videos_done ?? 0} video</div>
-      <div class="card-actions">
-        <button class="card-btn start" onclick="runInstance('${inst.id}', ${inst.port}, 'start')">▶ Start</button>
-        <button class="card-btn stop" onclick="runInstance('${inst.id}', ${inst.port}, 'stop')">⏹ Stop</button>
-      </div>
-    `;
-    grid.appendChild(card);
-  });
-}
+@app.route("/run", methods=["POST"])
+def run_now():
+    """
+    Trigger eksekusi loop dari dashboard.
+    Body JSON (opsional): { "channel_name": "...", "action": "start"|"stop"|"pause" }
+    """
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "start")
 
-function colorForStatus(s) {
-  const map = { idle: 'var(--green)', running: 'var(--accent)', error: 'var(--red)', paused: 'var(--orange)', offline: 'var(--muted)' };
-  return map[s] || 'var(--text)';
-}
+    if action == "stop":
+        update_state(status="idle", loop_active=False, current_step="Dihentikan manual")
+        return jsonify({"ok": True, "message": f"Instance {INSTANCE} dihentikan"})
 
-function updateStats() {
-  const all = Object.values(instanceData);
-  const online = all.filter(d => d.status && d.status !== 'offline').length;
-  const running = all.filter(d => d.status === 'running').length;
-  const videos = all.reduce((sum, d) => sum + (d.videos_done || 0), 0);
-  document.getElementById('statOnline').textContent = online;
-  document.getElementById('statRunning').textContent = running;
-  document.getElementById('statVideos').textContent = videos;
-}
+    if action == "pause":
+        update_state(status="paused", current_step="Dijeda manual")
+        return jsonify({"ok": True, "message": f"Instance {INSTANCE} dijeda"})
 
-// ═══════════════════════════════════
-// FETCH STATUS
-// ═══════════════════════════════════
-async function fetchStatus(inst) {
-  try {
-    const res = await fetch(getUrl(inst.port, '/status'), { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    instanceData[inst.id] = data;
-  } catch (e) {
-    instanceData[inst.id] = { status: 'offline', current_step: null, videos_done: 0 };
-  }
-}
+    # action == "start" — trigger loop via JS extension tidak bisa langsung,
+    # tapi kita bisa update state supaya extension polling tahu harus mulai
+    channel = data.get("channel_name", "")
+    update_state(
+        status="running",
+        loop_active=True,
+        current_channel=channel or _server_state.get("current_channel"),
+        current_step="Menunggu eksekusi extension...",
+        last_error=None,
+    )
+    return jsonify({
+        "ok": True,
+        "message": f"Instance {INSTANCE} siap jalan",
+        "note": "Extension Chrome perlu aktif untuk memulai render sesungguhnya"
+    })
 
-async function refreshAll(silent = true) {
-  if (!silent) addLog('info', '↻ Refresh manual...');
-  const prevStates = {};
-  INSTANCES.forEach(i => { prevStates[i.id] = instanceData[i.id]?.status; });
-  await Promise.all(INSTANCES.map(fetchStatus));
-  // Log hanya kalau ada perubahan status
-  INSTANCES.forEach(i => {
-    const prev = prevStates[i.id];
-    const curr = instanceData[i.id]?.status;
-    if (prev !== undefined && prev !== curr) {
-      const icon = curr === 'offline' ? '🔴' : curr === 'running' ? '🟢' : curr === 'error' ? '❌' : '🟡';
-      const type = curr === 'error' ? 'err' : curr === 'running' ? 'ok' : 'info';
-      addLog(type, `${icon} Instance ${i.id}: ${prev} → ${curr}`);
-    }
-  });
-  renderCards();
-  updateStats();
-}
+_server_start_time = _time.time()
 
-// ═══════════════════════════════════
-// CONTROL
-// ═══════════════════════════════════
-async function sendRun(port, action, channelName = '') {
-  try {
-    const res = await fetch(getUrl(port, '/run'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, channel_name: channelName }),
-      signal: AbortSignal.timeout(4000),
-    });
-    const data = await res.json();
-    return { ok: data.ok, msg: data.message };
-  } catch (e) {
-    return { ok: false, msg: 'Tidak bisa terhubung ke port ' + port };
-  }
-}
 
-async function runAll(action) {
-  const label = { start: '▶ JALANKAN', pause: '⏸ JEDA', stop: '⏹ STOP' }[action];
-  addLog('info', `${label} semua instance (${INSTANCES.length}x)...`);
-  showToast(`⏳ Mengirim perintah ke semua server...`);
+# ════════════════════════════════════════
+# MAIN
+# ════════════════════════════════════════
+if __name__ == "__main__":
+    print("\n" + "=" * 52)
+    print(f"🌌  NdolGates Visual Engine Server v2.0")
+    print(f"📦  Instance : {INSTANCE}")
+    print("=" * 52)
+    print(f"🎬 FFmpeg : {FFMPEG or '❌ TIDAK DITEMUKAN — install ffmpeg!'}")
+    print(f"🌐 Server : http://127.0.0.1:{PORT}")
+    print(f"📡 Endpoints:")
+    print(f"   GET  /health")
+    print(f"   GET  /status          ← Dashboard monitor")
+    print(f"   POST /run             ← Dashboard control")
+    print(f"   POST /analyze_channel")
+    print(f"   POST /generate_prompt")
+    print(f"   POST /generate_caption")
+    print(f"   POST /render_loop")
+    print(f"💡 Jangan tutup window ini! (Instance {INSTANCE})")
+    print("=" * 52 + "\n")
 
-  const results = await Promise.all(INSTANCES.map(i => sendRun(i.port, action)));
-  const ok = results.filter(r => r.ok).length;
-  const fail = results.length - ok;
+    if not FFMPEG:
+        print("⚠️  WARNING: FFmpeg tidak ditemukan!")
+        print("   /render_loop tidak akan berfungsi.")
+        print("   Download: https://ffmpeg.org/download.html\n")
 
-  addLog('ok', `✅ Berhasil: ${ok} instance`);
-  if (fail > 0) addLog('err', `❌ Gagal (offline): ${fail} instance`);
-  showToast(`${label}: ${ok}/${INSTANCES.length} server merespons`);
-
-  setTimeout(() => refreshAll(true), 1000);
-}
-
-async function runInstance(id, port, action) {
-  addLog('info', `→ Instance ${id} [${port}]: ${action.toUpperCase()}`);
-  const result = await sendRun(port, action);
-  if (result.ok) {
-    addLog('ok', `✅ ${id}: ${result.msg}`);
-    showToast(`✅ ${id} — ${action}`);
-  } else {
-    addLog('err', `❌ ${id}: ${result.msg}`);
-    showToast(`❌ ${id} offline`);
-  }
-  setTimeout(() => refreshAll(true), 800);
-}
-
-// ═══════════════════════════════════
-// LOG
-// ═══════════════════════════════════
-function addLog(type, msg) {
-  const box = document.getElementById('logBox');
-  const now = new Date().toTimeString().slice(0,8);
-  const el = document.createElement('div');
-  el.className = 'log-entry ' + type;
-  el.textContent = `[${now}] ${msg}`;
-  box.appendChild(el);
-  box.scrollTop = box.scrollHeight;
-  // Keep max 50 entries
-  while (box.children.length > 50) box.removeChild(box.firstChild);
-}
-
-// ═══════════════════════════════════
-// TOAST
-// ═══════════════════════════════════
-let toastTimer = null;
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
-}
-
-// ═══════════════════════════════════
-// AUTO REFRESH (setiap 10 detik)
-// ═══════════════════════════════════
-function startAutoRefresh() {
-  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-  autoRefreshTimer = setInterval(refreshAll, 10000);
-}
-
-// ═══════════════════════════════════
-// INIT
-// ═══════════════════════════════════
-document.getElementById('serverIp').value = serverIp;
-
-// Initial render (all offline)
-INSTANCES.forEach(i => instanceData[i.id] = { status: 'offline', current_step: null, videos_done: 0 });
-renderCards();
-
-addLog('info', `Dashboard aktif — IP: ${serverIp}`);
-addLog('info', 'Mengambil status awal...');
-
-refreshAll(false).then(() => {
-  addLog('ok', 'Status awal berhasil dimuat');
-  startAutoRefresh();
-});
-</script>
-</body>
-</html>
+    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
