@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>NdolGates Control Center</title>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #07080d;
+    --surface: #0d1018;
+    --panel: #111520;
+    --border: #1e2535;
+    --accent: #00d4ff;
+    --accent2: #7b2fff;
+    --gold: #f0a500;
+    --green: #00ff88;
+    --red: #ff3355;
+    --orange: #ff8c00;
+    --text: #c8d8f0;
+    --muted: #4a5568;
+    --glow: 0 0 12px rgba(0, 212, 255, 0.4);
+    --glow-green: 0 0 12px rgba(0, 255, 136, 0.4);
+    --glow-red: 0 0 12px rgba(255, 51, 85, 0.4);
+    --r: 10px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: 
+      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; padding: 16px; }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    margin-bottom: 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent2), var(--accent), var(--accent2));
+    animation: scanline 3s linear infinite;
+    background-size: 200% 100%;
+  }
+  @keyframes scanline { 0%{background-position:0%} 100%{background-position:200%} }
+
+  .logo-text { font-size: 1.2rem; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
+  .logo-sub { font-size: 0.7rem; color: var(--muted); font-family: 'Share Tech Mono', monospace; margin-top: 2px; }
+  .live-badge {
+    display: flex; align-items: center; gap: 6px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem; color: var(--green);
+    background: rgba(0,255,136,0.08);
+    border: 1px solid rgba(0,255,136,0.2);
+    padding: 5px 10px; border-radius: 20px;
+  }
+  .live-dot { width: 7px; height: 7px; background: var(--green); border-radius: 50%; animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
+
+  /* Global controls */
+  .global-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+
+  .section-title {
+    font-size: 0.65rem;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .btn {
+    flex: 1; min-width: 80px;
+    padding: 12px 8px;
+    border: none;
+    border-radius: 8px;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: white;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .btn:active::after { opacity: 0.08; }
+
+  .btn-start {
+    background: linear-gradient(135deg, #00b36b, #00ff88);
+    color: #001a0d;
+    box-shadow: var(--glow-green);
+  }
+  .btn-stop {
+    background: linear-gradient(135deg, #cc1133, #ff3355);
+    color: #fff;
+    box-shadow: var(--glow-red);
+  }
+  .btn-pause {
+    background: linear-gradient(135deg, #cc6600, #ff8c00);
+    color: #fff;
+  }
+  .btn-refresh {
+    background: var(--surface);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    flex: 0 0 auto; min-width: 44px; max-width: 44px;
+    padding: 12px 0;
+    font-size: 1.1rem;
+  }
+
+  /* Stats row */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .stat-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 8px;
+    text-align: center;
+  }
+  .stat-val {
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-family: 'Share Tech Mono', monospace;
+    color: var(--accent);
+    line-height: 1;
+  }
+  .stat-label { font-size: 0.62rem; color: var(--muted); letter-spacing: 1.5px; margin-top: 3px; }
+
+  /* IP Input */
+  .ip-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .ip-row { display: flex; gap: 8px; align-items: center; }
+  .ip-input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--accent);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .ip-input:focus { border-color: var(--accent); }
+  .btn-save {
+    background: var(--accent2);
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    padding: 10px 14px;
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .btn-save:active { opacity: 0.8; }
+  .ip-hint { font-size: 0.65rem; color: var(--muted); margin-top: 6px; font-family: 'Share Tech Mono', monospace; }
+
+  /* Instance grid */
+  .instances-title {
+    font-size: 0.65rem;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  .instance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  .instance-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 12px;
+    transition: border-color 0.2s;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+  }
+  .instance-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: var(--border);
+    transition: background 0.3s;
+  }
+  .instance-card.online::before { background: var(--green); }
+  .instance-card.running::before { background: var(--accent); animation: blink 1s ease-in-out infinite; }
+  .instance-card.error::before { background: var(--red); }
+  .instance-card.paused::before { background: var(--orange); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .instance-card.online { border-color: rgba(0,255,136,0.15); }
+  .instance-card.running { border-color: rgba(0,212,255,0.25); }
+  .instance-card.error { border-color: rgba(255,51,85,0.2); }
+
+  .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .card-instance { font-size: 1.3rem; font-weight: 700; letter-spacing: 1px; }
+  .card-port { font-family: 'Share Tech Mono', monospace; font-size: 0.65rem; color: var(--muted); }
+
+  .card-status {
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    padding: 3px 7px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .status-offline { background: rgba(74,85,104,0.3); color: var(--muted); }
+  .status-online { background: rgba(0,255,136,0.12); color: var(--green); }
+  .status-running { background: rgba(0,212,255,0.12); color: var(--accent); }
+  .status-error { background: rgba(255,51,85,0.12); color: var(--red); }
+  .status-paused { background: rgba(255,140,0,0.12); color: var(--orange); }
+
+  .card-step {
+    font-size: 0.68rem;
+    color: var(--muted);
+    font-family: 'Share Tech Mono', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+  }
+  .card-videos { font-size: 0.65rem; color: var(--accent); margin-top: 6px; font-family: 'Share Tech Mono', monospace; }
+
+  /* Card mini buttons */
+  .card-actions { display: flex; gap: 5px; margin-top: 8px; }
+  .card-btn {
+    flex: 1;
+    padding: 5px 0;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .card-btn.start { color: var(--green); border-color: rgba(0,255,136,0.2); }
+  .card-btn.stop  { color: var(--red); border-color: rgba(255,51,85,0.2); }
+  .card-btn:active { opacity: 0.7; transform: scale(0.95); }
+
+  /* Log panel */
+  .log-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 14px;
+    margin-top: 14px;
+  }
+  .log-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    height: 120px;
+    overflow-y: auto;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    line-height: 1.7;
+  }
+  .log-entry { color: var(--muted); }
+  .log-entry.ok { color: var(--green); }
+  .log-entry.err { color: var(--red); }
+  .log-entry.info { color: var(--accent); }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 10px 20px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-family: 'Share Tech Mono', monospace;
+    z-index: 999;
+    opacity: 0;
+    transition: opacity 0.3s;
+    white-space: nowrap;
+    box-shadow: var(--glow);
+  }
+  .toast.show { opacity: 1; }
+
+  /* Spinner */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { display: inline-block; animation: spin 1s linear infinite; }
+
+  /* Responsive: single column on very small screens */
+  @media (max-width: 340px) {
+    .instance-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <div class="logo-text">⚡ NDOLGATES</div>
+      <div class="logo-sub">VISUAL ENGINE v2.0 — CONTROL CENTER</div>
+    </div>
+    <div class="live-badge">
+      <div class="live-dot"></div>
+      LIVE
+    </div>
+  </div>
+
+  <!-- IP Config -->
+  <div class="ip-panel">
+    <div class="section-title">🖥 IP Komputer (PC lokal kamu)</div>
+    <div class="ip-row">
+      <input class="ip-input" id="serverIp" type="text" placeholder="192.168.1.x" maxlength="15">
+      <button class="btn-save" onclick="saveIp()">SIMPAN</button>
+    </div>
+    <div class="ip-hint">Cari IP di CMD: <strong>ipconfig</strong> → lihat IPv4 Address</div>
+  </div>
+
+  <!-- Global Controls -->
+  <div class="global-panel">
+    <div class="section-title">🌐 Kontrol Global (Semua Instance)</div>
+    <div class="btn-row">
+      <button class="btn btn-start" onclick="runAll('start')">▶ JALANKAN</button>
+      <button class="btn btn-pause" onclick="runAll('pause')">⏸ JEDA</button>
+      <button class="btn btn-stop" onclick="runAll('stop')">⏹ STOP</button>
+      <button class="btn btn-refresh" onclick="refreshAll(false)" title="Refresh">↻</button>
+    </div>
+    <div class="stats-row">
+      <div class="stat-box">
+        <div class="stat-val" id="statOnline">—</div>
+        <div class="stat-label">ONLINE</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" id="statRunning" style="color:var(--accent)">—</div>
+        <div class="stat-label">RUNNING</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" id="statVideos" style="color:var(--gold)">—</div>
+        <div class="stat-label">VIDEOS</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Instance Cards -->
+  <div class="instances-title">📡 STATUS 11 INSTANCE</div>
+  <div class="instance-grid" id="instanceGrid">
+    <!-- Generated by JS -->
+  </div>
+
+  <!-- Log -->
+  <div class="log-panel">
+    <div class="section-title">📋 Activity Log</div>
+    <div class="log-box" id="logBox"></div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════
+const INSTANCES = [
+  { id: 'A', port: 5500 },
+  { id: 'B', port: 5501 },
+  { id: 'C', port: 5502 },
+  { id: 'D', port: 5503 },
+  { id: 'E', port: 5504 },
+  { id: 'F', port: 5505 },
+  { id: 'G', port: 5506 },
+  { id: 'H', port: 5507 },
+  { id: 'I', port: 5508 },
+  { id: 'J', port: 5509 },
+  { id: 'K', port: 5510 },
+];
+
+let serverIp = localStorage.getItem('ndol_ip') || '127.0.0.1';
+let instanceData = {};
+let autoRefreshTimer = null;
+
+// ═══════════════════════════════════
+// IP MANAGEMENT
+// ═══════════════════════════════════
+function saveIp() {
+  const val = document.getElementById('serverIp').value.trim();
+  if (!val) return showToast('Masukkan IP dulu!');
+  serverIp = val;
+  localStorage.setItem('ndol_ip', val);
+  showToast('✅ IP disimpan: ' + val);
+  refreshAll();
+}
+
+function getUrl(port, endpoint) {
+  return `http://${serverIp}:${port}${endpoint}`;
+}
+
+// ═══════════════════════════════════
+// RENDER CARDS
+// ═══════════════════════════════════
+function renderCards() {
+  const grid = document.getElementById('instanceGrid');
+  grid.innerHTML = '';
+  INSTANCES.forEach(inst => {
+    const d = instanceData[inst.id] || {};
+    const status = d.status || 'offline';
+    const statusClass = status === 'idle' ? 'online' : status;
+    const statusLabel = status === 'idle' ? 'ONLINE' : status.toUpperCase();
+
+    const card = document.createElement('div');
+    card.className = `instance-card ${statusClass}`;
+    card.innerHTML = `
+      <div class="card-header">
+        <div>
+          <div class="card-instance" style="color:${colorForStatus(status)}">
+            ${inst.id}
+          </div>
+          <div class="card-port">:${inst.port}</div>
+        </div>
+        <span class="card-status status-${statusClass}">${statusLabel}</span>
+      </div>
+      <div class="card-step">${d.current_step || (status === 'offline' ? 'Tidak terhubung' : 'Siap')}</div>
+      <div class="card-videos">🎬 ${d.videos_done ?? 0} video</div>
+      <div class="card-actions">
+        <button class="card-btn start" onclick="runInstance('${inst.id}', ${inst.port}, 'start')">▶ Start</button>
+        <button class="card-btn stop" onclick="runInstance('${inst.id}', ${inst.port}, 'stop')">⏹ Stop</button>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+function colorForStatus(s) {
+  const map = { idle: 'var(--green)', running: 'var(--accent)', error: 'var(--red)', paused: 'var(--orange)', offline: 'var(--muted)' };
+  return map[s] || 'var(--text)';
+}
+
+function updateStats() {
+  const all = Object.values(instanceData);
+  const online = all.filter(d => d.status && d.status !== 'offline').length;
+  const running = all.filter(d => d.status === 'running').length;
+  const videos = all.reduce((sum, d) => sum + (d.videos_done || 0), 0);
+  document.getElementById('statOnline').textContent = online;
+  document.getElementById('statRunning').textContent = running;
+  document.getElementById('statVideos').textContent = videos;
+}
+
+// ═══════════════════════════════════
+// FETCH STATUS
+// ═══════════════════════════════════
+async function fetchStatus(inst) {
+  try {
+    const res = await fetch(getUrl(inst.port, '/status'), { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    instanceData[inst.id] = data;
+  } catch (e) {
+    instanceData[inst.id] = { status: 'offline', current_step: null, videos_done: 0 };
+  }
+}
+
+async function refreshAll(silent = true) {
+  if (!silent) addLog('info', '↻ Refresh manual...');
+  const prevStates = {};
+  INSTANCES.forEach(i => { prevStates[i.id] = instanceData[i.id]?.status; });
+  await Promise.all(INSTANCES.map(fetchStatus));
+  // Log hanya kalau ada perubahan status
+  INSTANCES.forEach(i => {
+    const prev = prevStates[i.id];
+    const curr = instanceData[i.id]?.status;
+    if (prev !== undefined && prev !== curr) {
+      const icon = curr === 'offline' ? '🔴' : curr === 'running' ? '🟢' : curr === 'error' ? '❌' : '🟡';
+      const type = curr === 'error' ? 'err' : curr === 'running' ? 'ok' : 'info';
+      addLog(type, `${icon} Instance ${i.id}: ${prev} → ${curr}`);
+    }
+  });
+  renderCards();
+  updateStats();
+}
+
+// ═══════════════════════════════════
+// CONTROL
+// ═══════════════════════════════════
+async function sendRun(port, action, channelName = '') {
+  try {
+    const res = await fetch(getUrl(port, '/run'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, channel_name: channelName }),
+      signal: AbortSignal.timeout(4000),
+    });
+    const data = await res.json();
+    return { ok: data.ok, msg: data.message };
+  } catch (e) {
+    return { ok: false, msg: 'Tidak bisa terhubung ke port ' + port };
+  }
+}
+
+async function runAll(action) {
+  const label = { start: '▶ JALANKAN', pause: '⏸ JEDA', stop: '⏹ STOP' }[action];
+  addLog('info', `${label} semua instance (${INSTANCES.length}x)...`);
+  showToast(`⏳ Mengirim perintah ke semua server...`);
+
+  const results = await Promise.all(INSTANCES.map(i => sendRun(i.port, action)));
+  const ok = results.filter(r => r.ok).length;
+  const fail = results.length - ok;
+
+  addLog('ok', `✅ Berhasil: ${ok} instance`);
+  if (fail > 0) addLog('err', `❌ Gagal (offline): ${fail} instance`);
+  showToast(`${label}: ${ok}/${INSTANCES.length} server merespons`);
+
+  setTimeout(() => refreshAll(true), 1000);
+}
+
+async function runInstance(id, port, action) {
+  addLog('info', `→ Instance ${id} [${port}]: ${action.toUpperCase()}`);
+  const result = await sendRun(port, action);
+  if (result.ok) {
+    addLog('ok', `✅ ${id}: ${result.msg}`);
+    showToast(`✅ ${id} — ${action}`);
+  } else {
+    addLog('err', `❌ ${id}: ${result.msg}`);
+    showToast(`❌ ${id} offline`);
+  }
+  setTimeout(() => refreshAll(true), 800);
+}
+
+// ═══════════════════════════════════
+// LOG
+// ═══════════════════════════════════
+function addLog(type, msg) {
+  const box = document.getElementById('logBox');
+  const now = new Date().toTimeString().slice(0,8);
+  const el = document.createElement('div');
+  el.className = 'log-entry ' + type;
+  el.textContent = `[${now}] ${msg}`;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+  // Keep max 50 entries
+  while (box.children.length > 50) box.removeChild(box.firstChild);
+}
+
+// ═══════════════════════════════════
+// TOAST
+// ═══════════════════════════════════
+let toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ═══════════════════════════════════
+// AUTO REFRESH (setiap 10 detik)
+// ═══════════════════════════════════
+function startAutoRefresh() {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(refreshAll, 10000);
+}
+
+// ═══════════════════════════════════
+// INIT
+// ═══════════════════════════════════
+document.getElementById('serverIp').value = serverIp;
+
+// Initial render (all offline)
+INSTANCES.forEach(i => instanceData[i.id] = { status: 'offline', current_step: null, videos_done: 0 });
+renderCards();
+
+addLog('info', `Dashboard aktif — IP: ${serverIp}`);
+addLog('info', 'Mengambil status awal...');
+
+refreshAll(false).then(() => {
+  addLog('ok', 'Status awal berhasil dimuat');
+  startAutoRefresh();
+});
+</script>
+</body>
+</html>
